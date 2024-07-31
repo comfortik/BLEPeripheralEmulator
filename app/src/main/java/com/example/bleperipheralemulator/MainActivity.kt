@@ -5,8 +5,11 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
+import android.widget.TextView
 import java.util.*
 
 class MainActivity : Activity() {
@@ -19,9 +22,13 @@ class MainActivity : Activity() {
 
     companion object {
         private const val TAG = "MainActivity"
-        private val SERVICE_UUID: UUID = UUID.fromString("0000180D-0000-1000-8000-00805f9b34fb") // Пример сервисного UUID
-        private val CHARACTERISTIC_UUID: UUID = UUID.fromString("00002A37-0000-1000-8000-00805f9b34fb") // Пример UUID характеристики
+        private val SERVICE_UUID: UUID = UUID.fromString("0000180D-0000-1000-8000-00805f9b34fb")
+        private val CHARACTERISTIC_UUID: UUID = UUID.fromString("00002A37-0000-1000-8000-00805f9b34fb")
         private val CLIENT_CHARACTERISTIC_CONFIG: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+        private const val BLOCK_SIZE = 160
+        private const val INTERVAL_MS = 60
+
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,8 +61,8 @@ class MainActivity : Activity() {
 
             characteristic = BluetoothGattCharacteristic(
                 CHARACTERISTIC_UUID,
-                BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
-                BluetoothGattCharacteristic.PERMISSION_READ
+                BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+                BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE
             )
 
             val descriptor = BluetoothGattDescriptor(
@@ -71,6 +78,29 @@ class MainActivity : Activity() {
         }
     }
 
+
+    private fun startAdvertising() {
+        Log.d(TAG, "Starting advertising")
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setConnectable(true)
+            .build()
+
+        val data = AdvertiseData.Builder()
+            .setIncludeDeviceName(true)
+            .addServiceUuid(ParcelUuid(SERVICE_UUID))
+            .build()
+
+        val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(true)
+            .build()
+
+        bluetoothLeAdvertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
+    }
+
+
+
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
             Log.i(TAG, "Advertising started successfully")
@@ -81,27 +111,11 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun startAdvertising() {
-        val settings = AdvertiseSettings.Builder()
-            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-            .setConnectable(true)
-            .build()
 
-        val data = AdvertiseData.Builder()
-            .setIncludeDeviceName(true) // Включаем имя устройства в рекламные данные
-            .addServiceUuid(ParcelUuid(SERVICE_UUID))
-            .build()
-
-        val scanResponse = AdvertiseData.Builder()
-            .setIncludeDeviceName(true) // Включаем имя устройства в данные ответа на сканирование
-            .build()
-
-        bluetoothLeAdvertiser.startAdvertising(settings, data, scanResponse, advertiseCallback)
-    }
 
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+            Log.i(TAG, "Connection state changed: $status, $newState")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.i(TAG, "Device connected: ${device.address}")
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
@@ -115,21 +129,33 @@ class MainActivity : Activity() {
             Log.i(TAG, "Read request for characteristic: ${characteristic.uuid}")
             if (CHARACTERISTIC_UUID == characteristic.uuid) {
                 bluetoothGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, characteristic.value)
+            } else {
+                Log.e(TAG, "Read request for unknown characteristic: ${characteristic.uuid}")
             }
         }
 
-        override fun onDescriptorWriteRequest(
-            device: BluetoothDevice, requestId: Int, descriptor: BluetoothGattDescriptor,
+        override fun onCharacteristicWriteRequest(
+            device: BluetoothDevice, requestId: Int, characteristic: BluetoothGattCharacteristic,
             preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray
         ) {
-            Log.i(TAG, "Descriptor write request for descriptor: ${descriptor.uuid}")
-            if (CLIENT_CHARACTERISTIC_CONFIG == descriptor.uuid) {
-                descriptor.value = value
+            Log.i(TAG, "Write request for characteristic: ${characteristic.uuid}")
+            if (CHARACTERISTIC_UUID == characteristic.uuid) {
+                characteristic.value = value
                 if (responseNeeded) {
                     bluetoothGattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                 }
+                runOnUiThread {
+                    val tv = findViewById<TextView>(R.id.tv)
+                    tv.text = value.toString(Charsets.UTF_8)
+                }
+                Log.i(TAG, "Characteristic written successfully")
+            } else {
+                Log.e(TAG, "Write request for unknown characteristic: ${characteristic.uuid}")
             }
         }
+
+
+
     }
 
 }
